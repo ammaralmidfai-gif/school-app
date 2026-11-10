@@ -1,0 +1,234 @@
+name: Build Roozmari School APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build APK for Android
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.19.0'
+          channel: 'stable'
+
+      - name: Create Flutter Project Structure
+        run: |
+          flutter create . --org com.roozmari --project-name rawa_school_app --platforms=android
+
+      - name: Inject pubspec dependencies
+        run: |
+          cat << 'EOF' > pubspec.yaml
+          name: rawa_school_app
+          description: تطبيق مدارس روا الرسمي
+          publish_to: 'none'
+          version: 1.0.0+1
+          environment:
+            sdk: '>=3.0.0 <4.0.0'
+          dependencies:
+            flutter:
+              sdk: flutter
+            flutter_inappwebview: ^6.0.0
+            permission_handler: ^11.3.0
+            shared_preferences: ^2.2.2
+            http: ^1.2.0
+            url_launcher: ^6.2.5
+            connectivity_plus: ^5.0.2
+            flutter_local_notifications: ^17.0.0
+          flutter:
+            uses-material-design: true
+          EOF
+
+      - name: Inject Dart Main Code
+        run: |
+          mkdir -p lib
+          cat << 'EOF' > lib/main.dart
+          import 'dart:async';
+          import 'dart:convert';
+          import 'package:flutter/material.dart';
+          import 'package:flutter/services.dart';
+          import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+          import 'package:permission_handler/permission_handler.dart';
+          import 'package:shared_preferences/shared_preferences.dart';
+          import 'package:http/http.dart' as http;
+          import 'package:url_launcher/url_launcher.dart';
+          import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+
+          const String BASE_DOMAIN = "https://rawa.roozmari.com";
+          const String BRIDGE_API  = "$BASE_DOMAIN/api_mobile_bridge.php";
+
+          final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
+
+          void main() async {
+            WidgetsFlutterBinding.ensureInitialized();
+            await [Permission.camera, Permission.microphone, Permission.notification].request();
+            
+            const AndroidInitializationSettings initAndroid = AndroidInitializationSettings('@mipmap/ic_launcher');
+            const InitializationSettings initSettings = InitializationSettings(android: initAndroid);
+            await flutterLocalNotificationsPlugin.initialize(initSettings);
+
+            runApp(const RoozmariSchoolApp());
+          }
+
+          class RoozmariSchoolApp extends StatelessWidget {
+            const RoozmariSchoolApp({super.key});
+            @override
+            Widget build(BuildContext context) {
+              return MaterialApp(
+                title: 'مدارس روا',
+                debugShowCheckedModeBanner: false,
+                theme: ThemeData(brightness: Brightness.dark, scaffoldBackgroundColor: const Color(0xFF090204)),
+                home: const RoozMainWebViewScreen(),
+              );
+            }
+          }
+
+          class RoozMainWebViewScreen extends StatefulWidget {
+            const RoozMainWebViewScreen({super.key});
+            @override
+            State<RoozMainWebViewScreen> createState() => _RoozMainWebViewScreenState();
+          }
+
+          class _RoozMainWebViewScreenState extends State<RoozMainWebViewScreen> {
+            InAppWebViewController? webViewController;
+            String initialTargetUrl = "$BASE_DOMAIN/login?app_mode=1";
+            bool isPageLoading = true;
+            bool hasNetworkError = false;
+            String savedUserRole = "";
+            String savedUserKey = "";
+            int lastNotifId = 0;
+            Timer? notifPollingTimer;
+
+            @override
+            void initState() {
+              super.initState();
+              _initAppSession();
+              notifPollingTimer = Timer.periodic(const Duration(seconds: 8), (_) => _checkServerForNewNotifications());
+            }
+
+            Future<void> _initAppSession() async {
+              final prefs = await SharedPreferences.getInstance();
+              savedUserRole = prefs.getString('rooz_user_role') ?? '';
+              savedUserKey  = prefs.getString('rooz_user_key') ?? '';
+              lastNotifId   = prefs.getInt('rooz_last_notif_id') ?? 0;
+              final lastUrl = prefs.getString('rooz_last_url') ?? '';
+              if (lastUrl.isNotEmpty && !lastUrl.contains('/login')) {
+                setState(() { initialTargetUrl = lastUrl.startsWith('http') ? lastUrl : "$BASE_DOMAIN$lastUrl"; });
+              }
+            }
+
+            Future<void> _registerUserInBridge(String role, String userKey, String currentUrl) async {
+              if (userKey.isEmpty) return;
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.setString('rooz_user_role', role);
+              await prefs.setString('rooz_user_key', userKey);
+              if (currentUrl.isNotEmpty && !currentUrl.contains('/login')) {
+                await prefs.setString('rooz_last_url', currentUrl);
+              }
+              savedUserRole = role;
+              savedUserKey  = userKey;
+              try {
+                await http.post(Uri.parse("$BRIDGE_API?bridge_action=register_device"), body: {
+                  'user_role': role, 'user_key': userKey, 'platform': 'flutter_app', 'fcm_token': 'LOCAL_ACTIVE_DEVICE',
+                });
+              } catch (_) {}
+            }
+
+            Future<void> _checkServerForNewNotifications() async {
+              if (savedUserKey.isEmpty) return;
+              try {
+                final uri = Uri.parse("$BRIDGE_API?bridge_action=check_native_notifications&user_role=${Uri.encodeComponent(savedUserRole)}&user_key=${Uri.encodeComponent(savedUserKey)}&last_notif_id=$lastNotifId");
+                final res = await http.get(uri).timeout(const Duration(seconds: 5));
+                if (res.statusCode == 200) {
+                  final data = jsonDecode(res.body);
+                  if (data['status'] == 'new_notification') {
+                    final int newId = data['notif_id'] ?? 0;
+                    if (newId > lastNotifId) {
+                      lastNotifId = newId;
+                      final prefs = await SharedPreferences.getInstance();
+                      await prefs.setInt('rooz_last_notif_id', lastNotifId);
+                      await flutterLocalNotificationsPlugin.show(
+                        0, data['title'] ?? '🔔 إشعار جديد', data['body'] ?? 'لديك تبليغ جديد',
+                        const NotificationDetails(android: AndroidNotificationDetails('channel_id', 'الرئيسية', importance: Importance.max)),
+                      );
+                    }
+                  }
+                }
+              } catch (_) {}
+            }
+
+            @override
+            Widget build(BuildContext context) {
+              return Scaffold(
+                body: SafeArea(
+                  child: InAppWebView(
+                    initialUrlRequest: URLRequest(url: WebUri(initialTargetUrl)),
+                    initialSettings: InAppWebViewSettings(javaScriptEnabled: true, mediaPlaybackRequiresUserGesture: false, allowsInlineMediaPlayback: true, useOnDownloadStart: true, domStorageEnabled: true, databaseEnabled: true, cacheEnabled: true),
+                    onWebViewCreated: (controller) {
+                      webViewController = controller;
+                      controller.addJavaScriptHandler(
+                        handlerName: 'RoozFlutterBridge',
+                        callback: (args) {
+                          if (args.isNotEmpty) {
+                            try {
+                              final Map<String, dynamic> msg = jsonDecode(args[0].toString());
+                              if (msg['event'] == 'USER_LOGGED_IN') {
+                                _registerUserInBridge(msg['role'] ?? 'student', msg['user_key'] ?? '', msg['current_url'] ?? '');
+                              }
+                            } catch (_) {}
+                          }
+                        },
+                      );
+                    },
+                    onLoadStop: (controller, url) async {
+                      await controller.evaluateJavascript(source: """
+                        window.RoozFlutterBridge = { postMessage: function(d) { window.flutter_inappwebview.callHandler('RoozFlutterBridge', d); } };
+                        (function() {
+                          if (typeof detectCurrentUserContext === 'function') {
+                            var ctx = detectCurrentUserContext();
+                            var uKey = (ctx.role === 'teacher') ? (ctx.uname || ctx.uid) : ctx.uid;
+                            if (ctx.role !== 'guest' && uKey) {
+                              window.RoozFlutterBridge.postMessage(JSON.stringify({ event: 'USER_LOGGED_IN', role: ctx.role, user_key: uKey, current_url: window.location.href }));
+                            }
+                          }
+                        })();
+                      """);
+                    },
+                    onPermissionRequest: (controller, request) async => PermissionResponse(resources: request.resources, action: PermissionResponseAction.GRANT),
+                    shouldOverrideUrlLoading: (controller, navAction) async {
+                      final uri = navAction.request.url;
+                      if (uri != null && (uri.toString().contains("whatsapp") || uri.toString().startsWith("tel:"))) {
+                        await launchUrl(uri, mode: LaunchMode.externalApplication);
+                        return NavigationActionPolicy.CANCEL;
+                      }
+                      return NavigationActionPolicy.ALLOW;
+                    },
+                  ),
+                ),
+              );
+            }
+          }
+          EOF
+
+      - name: Build APK File
+        run: flutter build apk --release
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: roozmari-school-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
