@@ -1,4 +1,4 @@
-name: Build Roozmari School APK
+name: Build Roozmari Android & iOS
 
 on:
   push:
@@ -6,8 +6,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
-    name: Build APK for Android
+  build_android:
+    name: Build Android APK
     runs-on: ubuntu-latest
 
     steps:
@@ -26,27 +26,46 @@ jobs:
           flutter-version: '3.19.0'
           channel: 'stable'
 
-      - name: Create Flutter Project Structure
+      - name: Create Clean Flutter Project
         run: |
-          flutter create . --org com.roozmari --project-name rawa_school_app --platforms=android
+          rm -rf android ios lib pubspec.yaml test
+          flutter create . --org com.roozmari --project-name rawa_school_app --platforms=android,ios
 
-      - name: Inject Full AndroidManifest.xml with Internet & Camera Permissions
+      - name: Generate pubspec.yaml, AndroidManifest.xml and main.dart safely via Python
         run: |
-          cat << 'EOF' > android/app/src/main/AndroidManifest.xml
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+          python3 - << 'PYEOF'
+          import os
+
+          pubspec_content = """name: rawa_school_app
+          description: تطبيق مدارس روا الرسمي
+          publish_to: 'none'
+          version: 2.0.0+2
+
+          environment:
+            sdk: '>=3.0.0 <4.0.0'
+
+          dependencies:
+            flutter:
+              sdk: flutter
+            webview_flutter: ^4.7.0
+            webview_flutter_android: ^3.15.0
+            webview_flutter_wkwebview: ^3.12.0
+            shared_preferences: ^2.2.2
+            http: ^1.2.0
+            url_launcher: ^6.2.5
+
+          flutter:
+            uses-material-design: true
+          """
+          with open("pubspec.yaml", "w", encoding="utf-8") as f:
+              f.write("\n".join([line[10:] if line.startswith("          ") else line for line in pubspec_content.splitlines()]))
+
+          manifest_content = """<manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <uses-permission android:name="android.permission.INTERNET"/>
               <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
-              <uses-permission android:name="android.permission.WAKE_LOCK"/>
               <uses-permission android:name="android.permission.CAMERA"/>
               <uses-permission android:name="android.permission.RECORD_AUDIO"/>
               <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>
-              <uses-permission android:name="android.permission.VIDEO_CAPTURE"/>
-              <uses-permission android:name="android.permission.AUDIO_CAPTURE"/>
-              <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
-              <uses-permission android:name="android.permission.VIBRATE"/>
-
-              <uses-feature android:name="android.hardware.camera" android:required="false"/>
-              <uses-feature android:name="android.hardware.camera.autofocus" android:required="false"/>
 
               <application
                   android:label="مدارس روا"
@@ -76,74 +95,35 @@ jobs:
                       android:value="2" />
               </application>
           </manifest>
-          EOF
+          """
+          with open("android/app/src/main/AndroidManifest.xml", "w", encoding="utf-8") as f:
+              f.write("\n".join([line[10:] if line.startswith("          ") else line for line in manifest_content.splitlines()]))
 
-      - name: Download School Logo as App Icon
-        run: |
-          curl -L -s "https://rawa.roozmari.com/images/logo.png" -o school_logo.png || true
-          if [ -s school_logo.png ]; then
-            cp school_logo.png android/app/src/main/res/mipmap-mdpi/ic_launcher.png || true
-            cp school_logo.png android/app/src/main/res/mipmap-hdpi/ic_launcher.png || true
-            cp school_logo.png android/app/src/main/res/mipmap-xhdpi/ic_launcher.png || true
-            cp school_logo.png android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png || true
-            cp school_logo.png android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png || true
-          fi
-
-      - name: Inject pubspec dependencies
-        run: |
-          cat << 'EOF' > pubspec.yaml
-          name: rawa_school_app
-          description: تطبيق مدارس روا الرسمي
-          publish_to: 'none'
-          version: 1.0.1+2
-          environment:
-            sdk: '>=3.0.0 <4.0.0'
-          dependencies:
-            flutter:
-              sdk: flutter
-            flutter_inappwebview: ^6.0.0
-            permission_handler: ^11.3.0
-            shared_preferences: ^2.2.2
-            http: ^1.2.0
-            url_launcher: ^6.2.5
-            flutter_local_notifications: ^17.0.0
-          flutter:
-            uses-material-design: true
-          EOF
-
-      - name: Inject Non-Blocking Dart Main Code
-        run: |
-          mkdir -p lib
-          cat << 'EOF' > lib/main.dart
-          import 'dart:async';
+          main_dart_content = """import 'dart:async';
           import 'dart:convert';
           import 'package:flutter/material.dart';
           import 'package:flutter/services.dart';
-          import 'package:flutter_inappwebview/flutter_inappwebview.dart';
-          import 'package:permission_handler/permission_handler.dart';
+          import 'package:webview_flutter/webview_flutter.dart';
+          import 'package:webview_flutter_android/webview_flutter_android.dart';
           import 'package:shared_preferences/shared_preferences.dart';
           import 'package:http/http.dart' as http;
           import 'package:url_launcher/url_launcher.dart';
-          import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
           const String BASE_DOMAIN = "https://rawa.roozmari.com";
           const String BRIDGE_API  = "$BASE_DOMAIN/api_mobile_bridge.php";
 
-          final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
-              FlutterLocalNotificationsPlugin();
-
           void main() {
             WidgetsFlutterBinding.ensureInitialized();
             SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
-              statusBarColor: Color(0xFF2A0815),
+              statusBarColor: Color(0xFF4A0E24),
               statusBarIconBrightness: Brightness.light,
             ));
-            // تشغيل الواجهة فوراً دون أي انتظار يسبب الشاشة السوداء
             runApp(const RoozmariSchoolApp());
           }
 
           class RoozmariSchoolApp extends StatelessWidget {
             const RoozmariSchoolApp({super.key});
+
             @override
             Widget build(BuildContext context) {
               return MaterialApp(
@@ -152,134 +132,145 @@ jobs:
                 theme: ThemeData(
                   brightness: Brightness.dark,
                   primaryColor: const Color(0xFFFF4D79),
-                  scaffoldBackgroundColor: const Color(0xFF2A0815),
+                  scaffoldBackgroundColor: const Color(0xFF4A0E24),
                 ),
-                home: const RoozMainWebViewScreen(),
+                home: const RoozMainScreen(),
               );
             }
           }
 
-          class RoozMainWebViewScreen extends StatefulWidget {
-            const RoozMainWebViewScreen({super.key});
+          class RoozMainScreen extends StatefulWidget {
+            const RoozMainScreen({super.key});
+
             @override
-            State<RoozMainWebViewScreen> createState() => _RoozMainWebViewScreenState();
+            State<RoozMainScreen> createState() => _RoozMainScreenState();
           }
 
-          class _RoozMainWebViewScreenState extends State<RoozMainWebViewScreen> {
-            InAppWebViewController? webViewController;
-            final String defaultStartUrl = "$BASE_DOMAIN/login?app_mode=1";
-            bool isPageLoading = true;
-            bool hasNetworkError = false;
-            double loadingProgress = 0.1;
-
-            String savedUserRole = "";
-            String savedUserKey = "";
-            int lastNotifId = 0;
-            Timer? notifPollingTimer;
+          class _RoozMainScreenState extends State<RoozMainScreen> {
+            late final WebViewController _controller;
+            bool isLoading = true;
+            bool hasError = false;
+            int loadProgress = 15;
 
             @override
             void initState() {
               super.initState();
-              _setupBackgroundPermissionsAndSession();
+              _initWebView();
             }
 
-            Future<void> _setupBackgroundPermissionsAndSession() async {
-              try {
-                const AndroidInitializationSettings initAndroid =
-                    AndroidInitializationSettings('@mipmap/ic_launcher');
-                const InitializationSettings initSettings =
-                    InitializationSettings(android: initAndroid);
-                await flutterLocalNotificationsPlugin.initialize(initSettings);
-              } catch (_) {}
+            void _initWebView() {
+              final WebViewController controller = WebViewController()
+                ..setJavaScriptMode(JavaScriptMode.unrestricted)
+                ..setBackgroundColor(const Color(0xFF4A0E24))
+                ..setUserAgent("Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36 RoozmariMobileApp/2.0")
+                ..addJavaScriptChannel(
+                  'RoozFlutterBridge',
+                  onMessageReceived: (JavaScriptMessage message) {
+                    _handleBridgeMessage(message.message);
+                  },
+                )
+                ..setNavigationDelegate(
+                  NavigationDelegate(
+                    onPageStarted: (String url) {
+                      if (mounted) {
+                        setState(() {
+                          isLoading = true;
+                          hasError = false;
+                        });
+                      }
+                    },
+                    onProgress: (int progress) {
+                      if (mounted) {
+                        setState(() {
+                          loadProgress = progress;
+                          if (progress >= 75) {
+                            isLoading = false;
+                          }
+                        });
+                      }
+                    },
+                    onPageFinished: (String url) async {
+                      if (mounted) {
+                        setState(() {
+                          isLoading = false;
+                        });
+                      }
+                      if (!url.contains('/login')) {
+                        final prefs = await SharedPreferences.getInstance();
+                        await prefs.setString('rooz_last_url', url);
+                      }
+                    },
+                    onWebResourceError: (WebResourceError error) {
+                      if (error.isForMainFrame == true && mounted) {
+                        setState(() {
+                          isLoading = false;
+                        });
+                      }
+                    },
+                    onNavigationRequest: (NavigationRequest request) async {
+                      final url = request.url;
+                      if (url.contains("whatsapp") || url.startsWith("tel:") || url.startsWith("mailto:") || url.endsWith(".apk") || url.endsWith(".pdf")) {
+                        final uri = Uri.parse(url);
+                        await launchUrl(uri, mode: LaunchMode.externalApplication);
+                        return NavigationDecision.prevent;
+                      }
+                      return NavigationDecision.navigate;
+                    },
+                  ),
+                )
+                ..loadRequest(Uri.parse("$BASE_DOMAIN/login?app_mode=1"));
 
-              // طلب الصلاحيات بعد ثانية من رسم الشاشة حتى لا تتجمد الواجهة أبداً
-              Future.delayed(const Duration(seconds: 2), () async {
-                try {
-                  await [
-                    Permission.notification,
-                    Permission.camera,
-                    Permission.microphone,
-                  ].request();
-                } catch (_) {}
-              });
+              if (controller.platform is AndroidWebViewController) {
+                AndroidWebViewController.enableDebugging(false);
+                (controller.platform as AndroidWebViewController)
+                  ..setMediaPlaybackRequiresUserGesture(false)
+                  ..setOnPlatformPermissionRequest((PlatformWebViewPermissionRequest request) {
+                    request.grant();
+                  });
+              }
 
+              _controller = controller;
+              _restoreSavedSessionIfAny();
+            }
+
+            Future<void> _restoreSavedSessionIfAny() async {
               try {
                 final prefs = await SharedPreferences.getInstance();
-                savedUserRole = prefs.getString('rooz_user_role') ?? '';
-                savedUserKey  = prefs.getString('rooz_user_key') ?? '';
-                lastNotifId   = prefs.getInt('rooz_last_notif_id') ?? 0;
                 final lastUrl = prefs.getString('rooz_last_url') ?? '';
-
-                if (lastUrl.isNotEmpty && !lastUrl.contains('/login') && webViewController != null) {
+                if (lastUrl.isNotEmpty && !lastUrl.contains('/login')) {
                   final target = lastUrl.startsWith('http') ? lastUrl : "$BASE_DOMAIN$lastUrl";
-                  webViewController!.loadUrl(urlRequest: URLRequest(url: WebUri(target)));
+                  _controller.loadRequest(Uri.parse(target));
                 }
-              } catch (_) {}
-
-              notifPollingTimer = Timer.periodic(
-                const Duration(seconds: 8),
-                (_) => _checkServerForNewNotifications(),
-              );
-            }
-
-            Future<void> _registerUserInBridge(String role, String userKey, String currentUrl) async {
-              if (userKey.isEmpty) return;
-              savedUserRole = role;
-              savedUserKey  = userKey;
-              try {
-                final prefs = await SharedPreferences.getInstance();
-                await prefs.setString('rooz_user_role', role);
-                await prefs.setString('rooz_user_key', userKey);
-                if (currentUrl.isNotEmpty && !currentUrl.contains('/login')) {
-                  await prefs.setString('rooz_last_url', currentUrl);
-                }
-                await http.post(Uri.parse("$BRIDGE_API?bridge_action=register_device"), body: {
-                  'user_role': role,
-                  'user_key': userKey,
-                  'platform': 'flutter_app',
-                  'fcm_token': 'LOCAL_ACTIVE_DEVICE',
-                });
               } catch (_) {}
             }
 
-            Future<void> _checkServerForNewNotifications() async {
-              if (savedUserKey.isEmpty) return;
+            Future<void> _handleBridgeMessage(String rawJson) async {
               try {
-                final uri = Uri.parse(
-                  "$BRIDGE_API?bridge_action=check_native_notifications&user_role=${Uri.encodeComponent(savedUserRole)}&user_key=${Uri.encodeComponent(savedUserKey)}&last_notif_id=$lastNotifId",
-                );
-                final res = await http.get(uri).timeout(const Duration(seconds: 5));
-                if (res.statusCode == 200) {
-                  final data = jsonDecode(res.body);
-                  if (data['status'] == 'new_notification') {
-                    final int newId = data['notif_id'] ?? 0;
-                    if (newId > lastNotifId) {
-                      lastNotifId = newId;
-                      final prefs = await SharedPreferences.getInstance();
-                      await prefs.setInt('rooz_last_notif_id', lastNotifId);
-                      await flutterLocalNotificationsPlugin.show(
-                        DateTime.now().millisecondsSinceEpoch ~/ 1000,
-                        data['title'] ?? '🔔 إشعار جديد من مدارس روا',
-                        data['body'] ?? 'لديك تبليغ جديد في المنصة',
-                        const NotificationDetails(
-                          android: AndroidNotificationDetails(
-                            'roozmari_channel',
-                            'إشعارات مدارس روا',
-                            importance: Importance.max,
-                            priority: Priority.high,
-                          ),
-                        ),
-                      );
+                final Map<String, dynamic> msg = jsonDecode(rawJson);
+                if (msg['event'] == 'USER_LOGGED_IN') {
+                  final role = msg['role'] ?? 'student';
+                  final userKey = msg['user_key'] ?? '';
+                  final currentUrl = msg['current_url'] ?? '';
+                  if (userKey.toString().isNotEmpty) {
+                    final prefs = await SharedPreferences.getInstance();
+                    await prefs.setString('rooz_user_role', role.toString());
+                    await prefs.setString('rooz_user_key', userKey.toString());
+                    if (currentUrl.toString().isNotEmpty) {
+                      await prefs.setString('rooz_last_url', currentUrl.toString());
                     }
+                    await http.post(Uri.parse("$BRIDGE_API?bridge_action=register_device"), body: {
+                      'user_role': role.toString(),
+                      'user_key': userKey.toString(),
+                      'platform': 'flutter_app',
+                      'fcm_token': 'ACTIVE_APP_V2',
+                    });
                   }
+                } else if (msg['event'] == 'USER_LOGGED_OUT') {
+                  final prefs = await SharedPreferences.getInstance();
+                  await prefs.remove('rooz_last_url');
+                  await prefs.remove('rooz_user_key');
                 }
               } catch (_) {}
-            }
-
-            @override
-            void dispose() {
-              notifPollingTimer?.cancel();
-              super.dispose();
             }
 
             @override
@@ -288,150 +279,26 @@ jobs:
                 canPop: false,
                 onPopInvoked: (didPop) async {
                   if (didPop) return;
-                  if (webViewController != null && await webViewController!.canGoBack()) {
-                    await webViewController!.goBack();
+                  if (await _controller.canGoBack()) {
+                    await _controller.goBack();
                   }
                 },
                 child: Scaffold(
-                  backgroundColor: const Color(0xFF2A0815),
+                  backgroundColor: const Color(0xFF4A0E24),
                   body: SafeArea(
                     child: Stack(
                       children: [
-                        InAppWebView(
-                          initialUrlRequest: URLRequest(url: WebUri(defaultStartUrl)),
-                          initialSettings: InAppWebViewSettings(
-                            userAgent: "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36 RoozmariMobileApp/1.0",
-                            javaScriptEnabled: true,
-                            mediaPlaybackRequiresUserGesture: false,
-                            allowsInlineMediaPlayback: true,
-                            useOnDownloadStart: true,
-                            domStorageEnabled: true,
-                            databaseEnabled: true,
-                            cacheEnabled: true,
-                            supportZoom: false,
-                            mixedContentMode: MixedContentMode.MIXED_CONTENT_ALWAYS_ALLOW,
-                          ),
-                          onWebViewCreated: (controller) {
-                            webViewController = controller;
-                            controller.addJavaScriptHandler(
-                              handlerName: 'RoozFlutterBridge',
-                              callback: (args) {
-                                if (args.isNotEmpty) {
-                                  try {
-                                    final Map<String, dynamic> msg = jsonDecode(args[0].toString());
-                                    if (msg['event'] == 'USER_LOGGED_IN') {
-                                      _registerUserInBridge(
-                                        msg['role'] ?? 'student',
-                                        msg['user_key'] ?? '',
-                                        msg['current_url'] ?? '',
-                                      );
-                                    }
-                                  } catch (_) {}
-                                }
-                              },
-                            );
-                          },
-                          onLoadStart: (controller, url) {
-                            if (mounted) {
-                              setState(() {
-                                isPageLoading = true;
-                                hasNetworkError = false;
-                              });
-                            }
-                          },
-                          onProgressChanged: (controller, progress) {
-                            if (mounted) {
-                              setState(() {
-                                loadingProgress = progress / 100.0;
-                                if (progress >= 80) isPageLoading = false;
-                              });
-                            }
-                          },
-                          onLoadStop: (controller, url) async {
-                            if (mounted) {
-                              setState(() {
-                                isPageLoading = false;
-                              });
-                            }
-                            await controller.evaluateJavascript(source: """
-                              window.RoozFlutterBridge = {
-                                postMessage: function(d) {
-                                  window.flutter_inappwebview.callHandler('RoozFlutterBridge', d);
-                                }
-                              };
-                              (function() {
-                                if (typeof detectCurrentUserContext === 'function') {
-                                  var ctx = detectCurrentUserContext();
-                                  var uKey = (ctx.role === 'teacher') ? (ctx.uname || ctx.uid) : ctx.uid;
-                                  if (ctx.role !== 'guest' && uKey) {
-                                    window.RoozFlutterBridge.postMessage(JSON.stringify({
-                                      event: 'USER_LOGGED_IN',
-                                      role: ctx.role,
-                                      user_key: uKey,
-                                      current_url: window.location.href
-                                    }));
-                                  }
-                                }
-                              })();
-                            """);
-                          },
-                          // تجاوز أي مشاكل في فحص شهادة SSL داخل المحاكيات
-                          onReceivedServerTrustAuthRequest: (controller, challenge) async {
-                            return ServerTrustAuthResponse(
-                              action: ServerTrustAuthResponseAction.PROCEED,
-                            );
-                          },
-                          onPermissionRequest: (controller, request) async {
-                            return PermissionResponse(
-                              resources: request.resources,
-                              action: PermissionResponseAction.GRANT,
-                            );
-                          },
-                          shouldOverrideUrlLoading: (controller, navAction) async {
-                            final uri = navAction.request.url;
-                            if (uri != null) {
-                              final s = uri.toString();
-                              if (s.contains("whatsapp") || s.startsWith("tel:") || s.startsWith("mailto:")) {
-                                await launchUrl(uri, mode: LaunchMode.externalApplication);
-                                return NavigationActionPolicy.CANCEL;
-                              }
-                            }
-                            return NavigationActionPolicy.ALLOW;
-                          },
-                          onDownloadStartRequest: (controller, req) async {
-                            await launchUrl(req.url, mode: LaunchMode.externalApplication);
-                          },
-                        ),
-
-                        // شاشة تحميل أنيقة تظهر في الثواني الأولى ريثما تفتح صفحة تسجيل الدخول
-                        if (isPageLoading)
-                          Container(
-                            color: const Color(0xFF2A0815),
-                            child: Center(
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  const CircularProgressIndicator(color: Color(0xFFFF4D79)),
-                                  const SizedBox(height: 16),
-                                  const Text(
-                                    'جاري فتح منصة مدارس روا...',
-                                    style: TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 8),
-                                  SizedBox(
-                                    width: 180,
-                                    child: LinearProgressIndicator(
-                                      value: loadingProgress,
-                                      backgroundColor: Colors.white24,
-                                      color: const Color(0xFFFF4D79),
-                                    ),
-                                  ),
-                                ],
-                              ),
+                        WebViewWidget(controller: _controller),
+                        if (isLoading)
+                          Positioned(
+                            top: 0,
+                            left: 0,
+                            right: 0,
+                            child: LinearProgressIndicator(
+                              value: loadProgress / 100.0,
+                              backgroundColor: const Color(0xFF4A0E24),
+                              color: const Color(0xFFFF4D79),
+                              minHeight: 4,
                             ),
                           ),
                       ],
@@ -441,15 +308,118 @@ jobs:
               );
             }
           }
-          EOF
+          """
+          os.makedirs("lib", exist_ok=True)
+          with open("lib/main.dart", "w", encoding="utf-8") as f:
+              f.write("\n".join([line[10:] if line.startswith("          ") else line for line in main_dart_content.splitlines()]))
+          PYEOF
 
-      - name: Get Flutter Packages and Build APK
+      - name: Build Clean APK
         run: |
           flutter pub get
           flutter build apk --release
 
-      - name: Upload APK Artifact
+      - name: Upload Clean APK v2
         uses: actions/upload-artifact@v4
         with:
-          name: roozmari-school-apk-v2
+          name: roozmari-clean-apk-v2
           path: build/app/outputs/flutter-apk/app-release.apk
+
+  build_ios_simulator:
+    name: Build iOS App for Appetize Simulator
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter on macOS
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.19.0'
+          channel: 'stable'
+
+      - name: Create Clean iOS Flutter Project
+        run: |
+          rm -rf android ios lib pubspec.yaml test
+          flutter create . --org com.roozmari --project-name rawa_school_app --platforms=ios
+
+      - name: Generate iOS Code via Python
+        run: |
+          python3 - << 'PYEOF'
+          import os
+
+          pubspec_content = """name: rawa_school_app
+          description: تطبيق مدارس روا الرسمي
+          publish_to: 'none'
+          version: 2.0.0+2
+
+          environment:
+            sdk: '>=3.0.0 <4.0.0'
+
+          dependencies:
+            flutter:
+              sdk: flutter
+            webview_flutter: ^4.7.0
+            shared_preferences: ^2.2.2
+            http: ^1.2.0
+            url_launcher: ^6.2.5
+
+          flutter:
+            uses-material-design: true
+          """
+          with open("pubspec.yaml", "w", encoding="utf-8") as f:
+              f.write("\n".join([line[10:] if line.startswith("          ") else line for line in pubspec_content.splitlines()]))
+
+          main_dart_content = """import 'package:flutter/material.dart';
+          import 'package:webview_flutter/webview_flutter.dart';
+
+          void main() {
+            WidgetsFlutterBinding.ensureInitialized();
+            runApp(const MaterialApp(
+              debugShowCheckedModeBanner: false,
+              home: RoozIosScreen(),
+            ));
+          }
+
+          class RoozIosScreen extends StatefulWidget {
+            const RoozIosScreen({super.key});
+            @override
+            State<RoozIosScreen> createState() => _RoozIosScreenState();
+          }
+
+          class _RoozIosScreenState extends State<RoozIosScreen> {
+            late final WebViewController _controller;
+            @override
+            void initState() {
+              super.initState();
+              _controller = WebViewController()
+                ..setJavaScriptMode(JavaScriptMode.unrestricted)
+                ..loadRequest(Uri.parse("https://rawa.roozmari.com/login?app_mode=1"));
+            }
+            @override
+            Widget build(BuildContext context) {
+              return Scaffold(
+                backgroundColor: const Color(0xFF4A0E24),
+                body: SafeArea(child: WebViewWidget(controller: _controller)),
+              );
+            }
+          }
+          """
+          os.makedirs("lib", exist_ok=True)
+          with open("lib/main.dart", "w", encoding="utf-8") as f:
+              f.write("\n".join([line[10:] if line.startswith("          ") else line for line in main_dart_content.splitlines()]))
+          PYEOF
+
+      - name: Build iOS Simulator Bundle (.app)
+        run: |
+          flutter pub get
+          flutter build ios --simulator
+          cd build/ios/iphonesimulator
+          zip -r roozmari_ios_simulator.zip Runner.app
+
+      - name: Upload iOS Simulator Artifact for Appetize
+        uses: actions/upload-artifact@v4
+        with:
+          name: roozmari-ios-simulator-zip
+          path: build/ios/iphonesimulator/roozmari_ios_simulator.zip
